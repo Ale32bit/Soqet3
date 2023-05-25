@@ -13,11 +13,12 @@ public class ClientManager
 {
     public static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     public static readonly Regex ChannelNameBlacklistRegex = new("@[^a-z0-9-_]", RegexOptions.NonBacktracking);
+    public const string PrivateChannelPrefix = "$";
 
     public delegate void ResponseHandler(string message);
 
     public readonly HashSet<SoqetClient> Clients = new();
-    public readonly ConcurrentDictionary<string, HashSet<SoqetClient>> Channels = new();
+    public readonly ConcurrentDictionary<Channel, HashSet<SoqetClient>> Channels = new();
 
     private readonly string _secretSalt;
 
@@ -63,16 +64,23 @@ public class ClientManager
         return Convert.ToHexString(digest);
     }
 
-    public static string SanitizeChannelName(string channelName)
+    public Channel GetChannelName(string channelName, string clientName = "")
     {
+        var channel = new Channel();
+        var isPrivate = channelName.StartsWith(PrivateChannelPrefix);
         channelName = channelName
             .ToLower()
             .Trim()
             [..Math.Min(128, channelName.Length)];
 
         channelName = ChannelNameBlacklistRegex.Replace(channelName, "_");
+        channel.Name = channelName;
+        if (isPrivate)
+            channel.Address = string.Format("${0}:{1}", clientName, channelName);
+        else
+            channel.Address = channelName;
 
-        return channelName;
+        return channel;
     }
 
     public async Task ProcessRequestAsync(SoqetClient client, string message, ResponseHandler handler)
@@ -151,7 +159,7 @@ public class ClientManager
         {
             if (client.Channels.Count < client.MaxOpenChannels)
             {
-                var chName = SanitizeChannelName(channel);
+                var chName = GetChannelName(channel, client.Name);
                 client.Channels.Add(chName);
                 var ch = Channels.GetOrAdd(chName, new HashSet<SoqetClient>());
                 ch.Add(client);
@@ -188,7 +196,7 @@ public class ClientManager
             }, JsonOptions);
         foreach (var channel in channels)
         {
-            var chName = SanitizeChannelName(channel);
+            var chName = GetChannelName(channel, client.Name);
             client.Channels.Remove(chName);
             if (Channels.TryGetValue(chName, out var ch))
                 ch.Remove(client);
@@ -203,8 +211,8 @@ public class ClientManager
 
     private string Send(SoqetClient client, Send request)
     {
-        var chName = SanitizeChannelName(request.Channel);
-        if (!client.Channels.Contains(chName))
+        var chAddr = GetChannelName(request.Channel, client.Name);
+        if (!client.Channels.Contains(chAddr))
         {
             return JsonSerializer.Serialize(new ErrorResponse
             {
@@ -218,17 +226,18 @@ public class ClientManager
         var payload = new Message
         {
             Data = request.Data,
-            Channel = chName,
+            Channel = chAddr.Name,
             Metadata = new()
             {
-                Channel = chName,
+                Channel = chAddr.Name,
+                Address = chAddr.Address,
                 DateTime = DateTime.UtcNow,
                 Guest = client.Guest,
                 Sender = client.Name,
             },
         };
 
-        var channel = Channels[chName];
+        var channel = Channels[chAddr];
         foreach (var cl in channel)
         {
             if (cl.SessionId == client.SessionId)
@@ -258,6 +267,7 @@ public class ClientManager
         }
 
         client.Name = GenerateClientName(request.Key);
+        client.Guest = false;
 
         return JsonSerializer.Serialize(new Response
         {
