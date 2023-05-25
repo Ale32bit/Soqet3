@@ -1,4 +1,4 @@
-﻿namespace Soqet3;
+﻿namespace Soqet3.Structs;
 
 public struct Channel
 {

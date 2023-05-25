@@ -1,4 +1,5 @@
 ﻿using System.Net.WebSockets;
+using Soqet3.Structs;
 
 namespace Soqet3.Models;
 

@@ -7,6 +7,7 @@ using System.Data;
 using System.Security.Cryptography;
 using System.Collections;
 using System.Text.RegularExpressions;
+using Soqet3.Structs;
 
 namespace Soqet3;
 public class ClientManager
