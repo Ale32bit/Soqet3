@@ -19,7 +19,7 @@ app.Use(async (context, next) =>
     await next();
 });
 
-app.Map("/ws", async (HttpContext context) =>
+app.Map("/ws/{nonce?}", async (HttpContext context) =>
 {
     if (!context.WebSockets.IsWebSocketRequest)
     {
