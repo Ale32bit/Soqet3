@@ -1,0 +1,16 @@
+version: "3"
+
+services:
+    soqet:
+        image: ghcr.io/ale32bit/soqet3:main
+        container_name: soqet
+        environment:
+            - PUID=1000
+            - GUID=1000
+            - TZ=Etc/UTC
+        volumes:
+            - ./appsettings.json:/app/appsettings.json
+        ports:
+            - 8080:80
+        restart: unless-stopped
+        
