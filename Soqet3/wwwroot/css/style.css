@@ -1,0 +1,23 @@
+
+header {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    font-weight: bold;
+    justify-content: space-between;
+    margin-bottom: 1rem;
+    align-items: center;
+}
+
+.navlinks {
+    list-style: none;
+    padding: 0;
+}
+
+    .navlinks > li {
+        font-family: 'Courier New', Courier, monospace;
+        display: inline-block;
+        margin: 0 0.7rem;
+        position: relative;
+        text-align: left;
+    }

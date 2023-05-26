@@ -12,6 +12,9 @@ builder.Services.AddControllers();
 
 var app = builder.Build();
 
+app.UseDefaultFiles();
+app.UseStaticFiles();
+
 app.UseWebSockets();
 app.MapControllers();
 
