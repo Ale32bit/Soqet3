@@ -4,6 +4,9 @@ using Microsoft.AspNetCore.Razor.TagHelpers;
 using Soqet3.Models;
 using System.Net.WebSockets;
 using System.Text;
+using System.Text.Json;
+using System.Timers;
+using Timer = System.Timers.Timer;
 
 namespace Soqet3
 {
@@ -13,9 +16,16 @@ namespace Soqet3
         private readonly ClientManager _clientManager;
         private WebSocket _webSocket;
         private SoqetClient _client;
+        private readonly Timer _pingTimer;
         public WebSocketController(ClientManager clientManager)
         {
             _clientManager = clientManager;
+            _pingTimer = new(TimeSpan.FromSeconds(10))
+            {
+                Enabled = false,
+                AutoReset = true,
+            };
+            _pingTimer.Elapsed += PingElapsed;
         }
 
         [Route("/ws/{nonce?}")]
@@ -38,7 +48,7 @@ namespace Soqet3
             _client.SendAsync = Send;
 
             await Send(hello);
-
+            _pingTimer.Start();
             await ListenAsync();
         }
 
@@ -52,6 +62,7 @@ namespace Soqet3
 
                 if (result.MessageType == WebSocketMessageType.Close)
                 {
+                    _pingTimer.Stop();
                     await _webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, null, default);
                     break;
                 }
@@ -71,6 +82,11 @@ namespace Soqet3
         private async Task Send(string data)
         {
             await _webSocket.SendAsync(Encoding.UTF8.GetBytes(data), WebSocketMessageType.Text, true, default);
+        }
+
+        private void PingElapsed(object? sender, ElapsedEventArgs e)
+        {
+            Send(JsonSerializer.Serialize(new WebSocketPing(), ClientManager.JsonOptions));
         }
     }
 }
