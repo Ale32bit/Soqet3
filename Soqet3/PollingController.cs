@@ -66,9 +66,11 @@ namespace Soqet3
 
         // GET: api/start
         [HttpGet("start")]
-        public PollingResponse Start()
+        public string Start()
         {
-            var client = _clientManager.Create(out _);
+            HttpContext.Response.StatusCode = StatusCodes.Status501NotImplemented;
+            return "WORK IN PROGRESS";
+            /*var client = _clientManager.Create(out _);
             var token = IssueToken();
 
             _clients[token] = client;
@@ -79,7 +81,7 @@ namespace Soqet3
                 Token = token,
             };
 
-            return response;
+            return response;*/
         }
 
         // GET api/<PollingController>/5

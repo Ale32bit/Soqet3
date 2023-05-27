@@ -7,6 +7,7 @@ using System.Text.Json;
 
 var builder = WebApplication.CreateBuilder(args);
 
+builder.Services.AddMemoryCache();
 builder.Services.AddSingleton<ClientManager>();
 builder.Services.AddControllers();
 
