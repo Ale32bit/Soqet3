@@ -1,6 +1,6 @@
-﻿namespace Soqet3.Models;
+﻿namespace Soqet3.Structs;
 
-public class Metadata
+public struct Metadata
 {
     public string Channel { get; set; }
     public string Address { get; internal set; }

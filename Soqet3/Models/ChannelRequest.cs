@@ -8,11 +8,10 @@ public class ChannelRequest : Request
     public IEnumerable<string> GetChannels()
     {
         if(!string.IsNullOrWhiteSpace(Channel))
-            return new[] { Channel };
+            return [Channel];
 
-        if (Channels != null)
-            return Channels.Distinct();
-
-        return Enumerable.Empty<string>();
+        return Channels != null 
+            ? Channels.Distinct() 
+            : [];
     }
 }

@@ -17,8 +17,11 @@ namespace Soqet3
         private WebSocket _webSocket;
         private SoqetClient _client;
         private readonly Timer _pingTimer;
-        public WebSocketController(ClientManager clientManager)
+        private readonly ILogger<WebSocketController> _logger;
+
+        public WebSocketController(ClientManager clientManager, ILogger<WebSocketController> logger)
         {
+            _logger = logger;
             _clientManager = clientManager;
             _pingTimer = new(TimeSpan.FromSeconds(10))
             {
@@ -29,7 +32,7 @@ namespace Soqet3
         }
 
         [Route("/ws/{nonce?}")]
-        public async Task Get()
+        public async Task Get(string nonce = "")
         {
             if (!HttpContext.WebSockets.IsWebSocketRequest)
             {
@@ -41,6 +44,9 @@ namespace Soqet3
                 });
                 return;
             }
+
+            var clientIp = HttpContext.Connection.RemoteIpAddress;
+            _logger.LogDebug("New WebSocket connection from {ClientIp}", clientIp);
 
             using var webSocket = await HttpContext.WebSockets.AcceptWebSocketAsync();
             _webSocket = webSocket;
@@ -56,26 +62,41 @@ namespace Soqet3
         {
             var buffer = new byte[4096];
             var message = new StringBuilder();
+
             while (_webSocket.State == WebSocketState.Open)
             {
-                var result = await _webSocket.ReceiveAsync(buffer, default);
-
-                if (result.MessageType == WebSocketMessageType.Close)
+                try
                 {
-                    _pingTimer.Stop();
-                    await _webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, null, default);
-                    break;
+                    var result = await _webSocket.ReceiveAsync(buffer, default);
+
+                    if (result.MessageType == WebSocketMessageType.Close)
+                    {
+                        _pingTimer.Stop();
+                        await _webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, null, default);
+                        break;
+                    }
+
+                    message.Append(Encoding.UTF8.GetString(buffer, 0, result.Count));
+
+                    if (result.EndOfMessage)
+                    {
+                        await _clientManager.ProcessRequestAsync(_client, message.ToString(),
+                            async data => await Send(data));
+                        message.Clear();
+                    }
                 }
-
-                message.Append(Encoding.UTF8.GetString(buffer, 0, result.Count));
-
-                if (result.EndOfMessage)
+                catch (WebSocketException e)
                 {
-                    await _clientManager.ProcessRequestAsync(_client, message.ToString(), async data => await Send(data));
-                    message.Clear();
+                    if (e.WebSocketErrorCode == WebSocketError.ConnectionClosedPrematurely)
+                    {
+                        break;
+                    }
+
+                    _logger.LogError(e, "Error while listening to WebSocket connection");
                 }
             }
 
+            _pingTimer.Stop();
             _clientManager.Delete(_client);
         }
 
@@ -86,7 +107,14 @@ namespace Soqet3
 
         private void PingElapsed(object? sender, ElapsedEventArgs e)
         {
-            Send(JsonSerializer.Serialize(new WebSocketPing(), ClientManager.JsonOptions));
+            Send(JsonSerializer.Serialize(new WebSocketPing(), ClientManager.JsonOptions))
+                .ContinueWith(t =>
+                {
+                    if (t.Exception is not null)
+                    {
+                        _logger.LogError(t.Exception, "Error while sending ping");
+                    }
+                }, TaskContinuationOptions.OnlyOnFaulted);
         }
     }
 }

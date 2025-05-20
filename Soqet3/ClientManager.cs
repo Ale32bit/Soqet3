@@ -1,11 +1,8 @@
 ﻿using Soqet3.Models;
-using System.Net.WebSockets;
 using System.Text.Json;
 using System.Text;
 using System.Collections.Concurrent;
-using System.Data;
 using System.Security.Cryptography;
-using System.Collections;
 using System.Text.RegularExpressions;
 using Soqet3.Structs;
 
@@ -22,10 +19,13 @@ public class ClientManager
     public readonly ConcurrentDictionary<Channel, HashSet<SoqetClient>> Channels = new();
 
     private readonly string _secretSalt;
+    private readonly ILogger<ClientManager> _logger;
 
-    public ClientManager(IConfiguration configuration)
+
+    public ClientManager(IConfiguration configuration, ILogger<ClientManager> logger)
     {
         _secretSalt = configuration["SecretSalt"] ?? "";
+        _logger = logger;
     }
 
     public SoqetClient Create(out string hello)
@@ -39,6 +39,10 @@ public class ClientManager
         }, JsonOptions);
 
         Clients.Add(client);
+        
+        _logger.LogDebug("New client connected {Name}", client.Name);
+        _logger.LogDebug("There are {Count} clients connected", Clients.Count);
+        
         return client;
     }
 
@@ -56,6 +60,9 @@ public class ClientManager
             }
         }
         Clients.Remove(client);
+        
+        _logger.LogDebug("Client disconnected {Name}", client.Name);
+        _logger.LogDebug("There are {Count} clients connected", Clients.Count);
     }
 
     public string GenerateClientName(string key)
@@ -104,7 +111,20 @@ public class ClientManager
             return;
         }
 
-        if (data == null || string.IsNullOrWhiteSpace(data.Type))
+        if (data is null)
+        {
+            var errorResponse = new ErrorResponse
+            {
+                Id = -1,
+                Error = "invalid_request",
+                Message = "Request is not in a valid format",
+                Name = client.Name,
+            };
+            handler(JsonSerializer.Serialize(errorResponse, JsonOptions));
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(data.Type))
         {
             var errorResponse = new ErrorResponse
             {
@@ -121,16 +141,16 @@ public class ClientManager
         {
             var response = data.Type switch
             {
-                "open" => OpenChannels(client, JsonSerializer.Deserialize<ChannelRequest>(message, JsonOptions)),
-                "close" => CloseChannels(client, JsonSerializer.Deserialize<ChannelRequest>(message, JsonOptions)),
-                "send" => Send(client, JsonSerializer.Deserialize<Send>(message, JsonOptions)),
-                "authenticate" => Authenticate(client, JsonSerializer.Deserialize<Authenticate>(message, JsonOptions)),
+                "open" => OpenChannels(client, JsonSerializer.Deserialize<ChannelRequest>(message, JsonOptions), data),
+                "close" => CloseChannels(client, JsonSerializer.Deserialize<ChannelRequest>(message, JsonOptions), data),
+                "send" => await Send(client, JsonSerializer.Deserialize<Send>(message, JsonOptions), data),
+                "authenticate" => Authenticate(client, JsonSerializer.Deserialize<Authenticate>(message, JsonOptions), data),
 
                 _ => JsonSerializer.Serialize(new ErrorResponse
                 {
                     Id = data.Id,
                     Error = "unknown_type",
-                    Message = "The request type provided in unknown",
+                    Message = "The request type provided is unknown",
                     Name = client.Name,
 
                 }, JsonOptions),
@@ -142,19 +162,29 @@ public class ClientManager
         {
             var errorResponse = new ErrorResponse
             {
-                Id = data?.Id ?? -1,
+                Id = data.Id,
                 Error = "json_error",
                 Message = ex.Message,
                 Name = client.Name,
             };
             handler(JsonSerializer.Serialize(errorResponse, JsonOptions));
-            return;
         }
     }
 
-    private string OpenChannels(SoqetClient client, ChannelRequest request)
+    private string OpenChannels(SoqetClient client, ChannelRequest? request, Request data)
     {
-        var channels = request.GetChannels();
+        if (request is null)
+        {
+            return JsonSerializer.Serialize(new ErrorResponse
+            {
+                Id = data.Id,
+                Error = "invalid_request",
+                Message = "Request is not in a valid format",
+                Name = client.Name,
+            }, JsonOptions);
+        }
+        
+        var channels = request.GetChannels().ToArray();
 
         foreach (var channel in channels)
         {
@@ -176,6 +206,8 @@ public class ClientManager
                 }, JsonOptions);
             }
         }
+        
+        _logger.LogTrace("Client {Name} opened the following channels: {Channels}", client.Name, string.Join(", ", channels));
 
         return JsonSerializer.Serialize(new Response
         {
@@ -184,10 +216,22 @@ public class ClientManager
         }, JsonOptions);
     }
 
-    private string CloseChannels(SoqetClient client, ChannelRequest request)
+    private string CloseChannels(SoqetClient client, ChannelRequest? request, Request data)
     {
-        var channels = request.GetChannels();
-        if (channels.Count() > 0xFF)
+        if (request is null)
+        {
+            return JsonSerializer.Serialize(new ErrorResponse
+            {
+                Id = data.Id,
+                Error = "invalid_request",
+                Message = "Request is not in a valid format",
+                Name = client.Name,
+            }, JsonOptions);
+        }
+        
+        var channels = request.GetChannels().ToArray();
+        
+        if (channels.Length > 0xFF)
             return JsonSerializer.Serialize(new ErrorResponse
             {
                 Id = request.Id,
@@ -195,6 +239,7 @@ public class ClientManager
                 Message = "The request body is too large",
                 Name = client.Name,
             }, JsonOptions);
+        
         foreach (var channel in channels)
         {
             var chName = GetChannelName(channel, client.Name);
@@ -202,6 +247,8 @@ public class ClientManager
             if (Channels.TryGetValue(chName, out var ch))
                 ch.Remove(client);
         }
+        
+        _logger.LogTrace("Client {Name} closed the following channels: {Channels}", client.Name, string.Join(", ", channels));
 
         return JsonSerializer.Serialize(new Response
         {
@@ -210,9 +257,32 @@ public class ClientManager
         }, JsonOptions);
     }
 
-    private string Send(SoqetClient client, Send request)
+    private async Task<string> Send(SoqetClient client, Send? request, Request data)
     {
+        if (request is null)
+        {
+            return JsonSerializer.Serialize(new ErrorResponse
+            {
+                Id = data.Id,
+                Error = "invalid_request",
+                Message = "Request is not in a valid format",
+                Name = client.Name,
+            }, JsonOptions);
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Channel))
+        {
+            return JsonSerializer.Serialize(new ErrorResponse
+            {
+                Id = data.Id,
+                Error = "invalid_channel",
+                Message = "The channel name provided is invalid",
+                Name = client.Name,
+            }, JsonOptions);
+        }
+        
         var chAddr = GetChannelName(request.Channel, client.Name);
+        
         if (!client.Channels.Contains(chAddr))
         {
             return JsonSerializer.Serialize(new ErrorResponse
@@ -228,7 +298,7 @@ public class ClientManager
         {
             Data = request.Data,
             Channel = chAddr.Name,
-            Metadata = new()
+            Metadata = new Metadata
             {
                 Channel = chAddr.Name,
                 Address = chAddr.Address,
@@ -238,14 +308,13 @@ public class ClientManager
             },
         };
 
-        var channel = Channels[chAddr];
-        foreach (var cl in channel)
-        {
-            if (cl.SessionId == client.SessionId)
-                continue;
-
-            cl.SendAsync(JsonSerializer.Serialize(payload, JsonOptions));
-        }
+        var eventMessage = JsonSerializer.Serialize(payload, JsonOptions);
+        var tasks = Channels[chAddr]
+            .Where(cl => cl.SessionId != client.SessionId)
+            .Select(cl => cl.SendAsync(eventMessage));
+        await Task.WhenAll(tasks);
+        
+        _logger.LogTrace("Client {Name} sent a message in {Channel}", client.Name, chAddr.Name);
 
         return JsonSerializer.Serialize(new Response
         {
@@ -254,8 +323,19 @@ public class ClientManager
         }, JsonOptions);
     }
 
-    private string Authenticate(SoqetClient client, Authenticate request)
+    private string Authenticate(SoqetClient client, Authenticate? request, Request data)
     {
+        if (request is null)
+        {
+            return JsonSerializer.Serialize(new ErrorResponse
+            {
+                Id = data.Id,
+                Error = "invalid_request",
+                Message = "Request is not in a valid format",
+                Name = client.Name,
+            }, JsonOptions);
+        }
+        
         if (string.IsNullOrWhiteSpace(request.Key))
         {
             return JsonSerializer.Serialize(new ErrorResponse
@@ -267,8 +347,11 @@ public class ClientManager
             }, JsonOptions);
         }
 
+        var oldName = client.Name;
         client.Name = GenerateClientName(request.Key);
         client.Guest = false;
+        
+        _logger.LogDebug("Client authenticated from {OldName} to {NewName}", oldName, client.Name);
 
         return JsonSerializer.Serialize(new Response
         {
